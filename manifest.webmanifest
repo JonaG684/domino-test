@@ -1,0 +1,12 @@
+{
+  "name": "Dominó con amigos",
+  "short_name": "Dominó",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b3326",
+  "theme_color": "#0b3326",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

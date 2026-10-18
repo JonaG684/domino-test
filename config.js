@@ -4,14 +4,22 @@ window.DOMINO_CONFIG = {
   // (solo letras minúsculas, números y guiones) para evitar choques con otras personas.
   peerPrefix: 'domino-amigos-',
 
-  // Servidores STUN (gratuitos). Para que funcione en casi cualquier red móvil conviene
-  // añadir un servidor TURN. Ejemplo (Open Relay de Metered, requiere cuenta gratuita):
-  //   { urls: 'turn:TU-SUBDOMINIO.metered.live:443?transport=tcp', username: '...', credential: '...' }
+  // Servidores STUN (gratuitos). Puedes añadir aquí tus propios TURN a mano:
+  //   { urls: 'turn:servidor:443?transport=tcp', username: '...', credential: '...' }
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:global.stun.twilio.com:3478' }
   ],
+
+  // Relevo TURN gratuito compartido (Open Relay) para redes que bloquean las conexiones directas.
+  // Se activa solo; pon false para desactivarlo.
+  freeRelay: true,
+
+  // Recomendado si tus amigos tienen problemas: crea una cuenta gratis en metered.ca (20 GB/mes de TURN),
+  // crea una "app" y pega aquí el nombre de la app y su API key. Así tienes un relevo propio y fiable.
+  meteredApp: '',   // por ejemplo 'minombre'  (de minombre.metered.live)
+  meteredKey: '',
 
   // Si algún día alojas tu propio PeerServer, indícalo aquí. Ejemplo:
   //   peerServer: { host: 'mi-peerserver.example.com', port: 443, path: '/', secure: true }

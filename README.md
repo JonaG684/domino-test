@@ -32,8 +32,11 @@ navegador con *Continuar tu sala*). Si alguien se desconecta, un bot juega por �
 - Gana el primer equipo en llegar a la meta.
 
 ## Si algún amigo no logra conectarse
-Algunas redes móviles/corporativas bloquean las conexiones directas. Solución: añadir un servidor TURN gratuito
-en `config.js` (`iceServers`; ejemplo incluido, p. ej. Metered Open Relay).
+Algunas redes móviles/corporativas bloquean las conexiones directas. El juego ya trae un relevo TURN gratuito
+compartido (`freeRelay` en `config.js`), pero no está garantizado. Para máxima fiabilidad crea una cuenta gratis en
+metered.ca (20 GB/mes), crea una app y pon `meteredApp` y `meteredKey` en `config.js`.
+Consejos: el anfitrión debe mantener la pantalla encendida (el juego pide a tu móvil que no se apague) y, si puede,
+alojar desde un PC; si alguien se cae, el botón «Reconectar ahora» lo vuelve a unir con su mismo asiento.
 
 ## Archivos
 `engine.js` reglas y bots · `app.js` interfaz y red · `config.js` ajustes · `test/simulate.js` (`node test/simulate.js`).

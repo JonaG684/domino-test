@@ -162,18 +162,49 @@
       h('p', {}, msg),
       onCancel ? h('button', { class: 'btn', onclick: onCancel }, 'Cancelar') : null), false);
   }
-  function fatal(msg) {
+  function fatal(msg, retry) {
     cleanup();
     openModal('fatal', h('div', { class: 'sheet' },
       h('h2', {}, 'Ups'),
       h('p', {}, msg),
-      h('button', { class: 'btn primary', onclick: () => { closeModal(); goHome(); } }, 'Aceptar')), false);
+      retry ? h('button', { class: 'btn primary', onclick: () => { closeModal(); retry(); } }, 'Reintentar') : null,
+      h('button', { class: retry ? 'btn' : 'btn primary', onclick: () => { closeModal(); goHome(); } }, retry ? 'Volver al inicio' : 'Aceptar')), false);
   }
 
   /* ============ red ============ */
 
+  // Servidores de conexión: STUN (gratis) + TURN de relevo para redes móviles/corporativas que bloquean
+  // las conexiones directas. El TURN se pide al arrancar; si falla, se sigue solo con STUN.
+  let iceP = null;
+  function b64(buf) { let s = ''; new Uint8Array(buf).forEach((c) => { s += String.fromCharCode(c); }); return btoa(s); }
+  function getIce() {
+    if (iceP) return iceP;
+    iceP = (async () => {
+      const list = (CFG.iceServers || []).slice();
+      const timeout = (ms) => new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
+      try {
+        if (CFG.meteredApp && CFG.meteredKey) {
+          const r = await Promise.race([fetch('https://' + CFG.meteredApp + '.metered.live/api/v1/turn/credentials?apiKey=' + encodeURIComponent(CFG.meteredKey)), timeout(4000)]);
+          const j = await r.json();
+          if (Array.isArray(j)) list.push(...j);
+        } else if (CFG.freeRelay !== false && window.crypto && crypto.subtle) {
+          // Relevo gratuito compartido (Open Relay): credenciales temporales firmadas con el secreto público.
+          const host = 'staticauth.openrelay.metered.ca';
+          const user = String(Math.floor(Date.now() / 1000) + 86400);
+          const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('openrelayprojectsecret'), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+          const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(user));
+          list.push({ urls: ['turn:' + host + ':80', 'turn:' + host + ':443', 'turn:' + host + ':443?transport=tcp', 'turns:' + host + ':443?transport=tcp'], username: user, credential: b64(sig) });
+        }
+      } catch (e) { /* sin TURN: se intenta conexión directa */ }
+      return list;
+    })();
+    return iceP;
+  }
   function peerOpts() {
-    return Object.assign({ debug: 0, config: { iceServers: CFG.iceServers || [] } }, CFG.peerServer || {});
+    return Object.assign({ debug: 0, config: { iceServers: S.ice || CFG.iceServers || [], iceCandidatePoolSize: 4 } }, CFG.peerServer || {});
+  }
+  function prepareNet() {
+    return Promise.all([loadPeer(), getIce().then((l) => { S.ice = l; })]);
   }
   function loadPeer() {
     if (window.Peer) return Promise.resolve();
@@ -185,6 +216,13 @@
     });
     return urls.reduce((p, u) => p.catch(() => load(u)), Promise.reject(new Error('start')))
       .then(() => { if (!window.Peer) throw new Error('nopeer'); });
+  }
+
+  function connBanner() {
+    if (!S.status) return null;
+    return h('div', { class: 'conn' }, S.status, S.mode === 'client' ? h('button', { class: 'btn small', style: 'margin-left:10px', onclick: () => {
+      clearTimeout(S.retryT); S.reconnectScheduled = false; S.retries = 0; connectClient();
+    } }, 'Reconectar ahora') : null);
   }
 
   function setStatus(s) {
@@ -225,7 +263,7 @@
   function createRoom() {
     if (!needName()) return;
     showBusy('Creando sala…');
-    loadPeer().then(() => openHost(randomCode(), 5, null))
+    prepareNet().then(() => openHost(randomCode(), 5, null))
       .catch(() => fatal('No se pudo cargar la conexión. Revisa tu internet e inténtalo de nuevo.'));
   }
 
@@ -237,7 +275,7 @@
     showBusy('Reabriendo la sala ' + saved.code + '…');
     const game = E.Game.fromJSON(saved.game);
     game.noTimers = false;
-    loadPeer().then(() => openHost(saved.code, 10, game))
+    prepareNet().then(() => openHost(saved.code, 10, game))
       .catch(() => fatal('No se pudo cargar la conexión. Revisa tu internet e inténtalo de nuevo.'));
   }
 
@@ -274,6 +312,10 @@
       }
     });
     peer.on('disconnected', () => { if (!peer.destroyed) { try { peer.reconnect(); } catch (e) { /* nada */ } } });
+    peer.on('error', (e) => {
+      // errores después de abrir la sala: solo reintentar la conexión con el servidor de salas
+      if (opened && !peer.destroyed && peer.disconnected) { try { peer.reconnect(); } catch (x) { /* nada */ } }
+    });
     peer.on('connection', hostAccept);
   }
 
@@ -282,12 +324,25 @@
     clearInterval(hostWatchT);
     hostWatchT = setInterval(() => {
       const now = Date.now();
+      if (S.peer && S.peer.disconnected && !S.peer.destroyed) { try { S.peer.reconnect(); } catch (e) { /* nada */ } }
       Object.values(S.conns).forEach((c) => { if (now - (c._seen || now) > 30000) { try { c.close(); } catch (e) { /* nada */ } hostClosed(c); } });
     }, 10000);
   }
 
+  function watchIce(conn, onDead) {
+    try {
+      const pc = conn.peerConnection;
+      if (!pc) return;
+      pc.addEventListener('iceconnectionstatechange', () => {
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') onDead();
+        else if (pc.iceConnectionState === 'disconnected') { try { pc.restartIce && pc.restartIce(); } catch (e) { /* nada */ } }
+      });
+    } catch (e) { /* nada */ }
+  }
+
   function hostAccept(conn) {
     conn._seen = Date.now();
+    watchIce(conn, () => hostClosed(conn));
     conn.on('data', (m) => hostData(conn, m));
     conn.on('close', () => hostClosed(conn));
     conn.on('error', () => hostClosed(conn));
@@ -357,7 +412,7 @@
     cleanup();
     S.mode = 'client'; S.code = code; S.leaving = false; S.everJoined = false; S.retries = 0; S.reconnectScheduled = false;
     showBusy('Conectando a la sala ' + code + '…', () => { closeModal(); goHome(); });
-    loadPeer().then(connectClient)
+    prepareNet().then(connectClient)
       .catch(() => fatal('No se pudo cargar la conexión. Revisa tu internet e inténtalo de nuevo.'));
   }
 
@@ -379,15 +434,16 @@
         conn.send({ type: 'join', name: S.name, token: S.token });
         startPing();
       });
+      watchIce(conn, () => { if (S.conn === conn) lost(); });
       conn.on('data', onHostMsg);
       conn.on('close', () => { if (S.conn === conn) lost(); });
       conn.on('error', () => { if (S.conn === conn) lost(); });
-      setTimeout(() => { if (!opened && S.conn === conn) lost(); }, 12000);
+      setTimeout(() => { if (!opened && S.conn === conn) lost(); }, 15000);
     });
     peer.on('error', (e) => {
       if (S.peer !== peer || S.leaving) return;
-      if (e.type === 'peer-unavailable' && !S.everJoined) {
-        fatal('No encontré la sala ' + S.code + '. Revisa el código y que tu amigo tenga la sala abierta.');
+      if (e.type === 'peer-unavailable' && !S.everJoined && S.retries >= 2) {
+        fatal('No encontré la sala ' + S.code + '. Revisa el código y que tu amigo tenga la sala abierta (y la pantalla encendida).', () => joinRoom(S.code));
       } else lost();
     });
   }
@@ -395,15 +451,16 @@
   function lost() {
     if (S.leaving || S.mode !== 'client' || S.reconnectScheduled) return;
     stopPing();
-    if (!S.everJoined && S.retries >= 2) {
-      fatal('No pude conectar con la sala. Puede que tu red bloquee las conexiones directas; prueba con otra red (datos móviles o Wi-Fi).');
+    if (!S.everJoined && S.retries >= 3) {
+      const code = S.code;
+      fatal('No pude conectar con la sala ' + code + '. Prueba: 1) revisar que el anfitrión tenga la sala abierta y la pantalla encendida, 2) cambiar entre Wi-Fi y datos móviles, 3) desactivar VPN o «Relay privado».', () => joinRoom(code));
       return;
     }
     if (S.retries >= 40) { fatal('Se perdió la conexión con el anfitrión.'); return; }
     S.retries++;
     S.reconnectScheduled = true;
     if (S.everJoined) setStatus('Reconectando…');
-    S.retryT = setTimeout(connectClient, 2000);
+    S.retryT = setTimeout(connectClient, S.everJoined ? 1500 : 2000);
   }
 
   function startPing() {
@@ -434,8 +491,18 @@
     }
   }
 
+  let wakeLock = null;
+  function keepAwake() {
+    try {
+      if (!navigator.wakeLock || wakeLock) return;
+      navigator.wakeLock.request('screen').then((l) => { wakeLock = l; l.addEventListener('release', () => { wakeLock = null; }); }).catch(() => {});
+    } catch (e) { /* nada */ }
+  }
+
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
+    if (S.mode) keepAwake();
+    if (S.mode === 'host' && S.peer && S.peer.disconnected && !S.peer.destroyed) { try { S.peer.reconnect(); } catch (e) { /* nada */ } }
     if (S.mode === 'client' && S.everJoined && !S.leaving && (!S.conn || !S.conn.open)) {
       clearTimeout(S.retryT);
       S.reconnectScheduled = false;
@@ -513,6 +580,7 @@
 
   function applyView(v) {
     S.view = v;
+    keepAwake();
     if (S.sel && !(v.legal || []).some((m) => E.sameTile(m.tile, S.sel))) S.sel = null;
     const ev = v.event;
     if (ev && ev.id !== S.lastEventId) {
@@ -619,7 +687,7 @@
       } else {
         card.append(h('div', {},
           h('div', { class: 'nm' }, (s.kind === 'bot' ? '🤖 ' : '') + s.name),
-          h('div', { class: 'tag' }, mine ? 'Tú' : (s.host ? 'Anfitrión' : (s.kind === 'bot' ? 'Bot' : 'Jugador')))));
+          h('div', { class: 'tag' }, (mine ? 'Tú' : (s.host ? 'Anfitrión' : (s.kind === 'bot' ? 'Bot' : 'Jugador'))) + (s.kind === 'human' ? (s.connected ? ' · ✅ conectado' : ' · ⚠️ sin conexión') : ''))));
         if (isHost && !mine) {
           card.append(h('div', { class: 'btns' }, h('button', { class: 'btn small danger', onclick: () => {
             hostKick(i, 'El anfitrión te sacó de la sala.');
@@ -635,7 +703,7 @@
     const free = v.seats.filter((s) => s.kind === 'empty').length;
     mount(h('div', { class: 'screen lobby' },
       h('div', { class: 'lobby-inner' },
-        S.status ? h('div', { class: 'conn' }, S.status) : null,
+        connBanner(),
         h('div', { class: 'code-card' },
           h('div', { class: 'dim', style: 'font-size:13px' }, 'Código de la sala'),
           h('div', { class: 'code' }, S.code),
@@ -724,7 +792,7 @@
           h('div', { class: 'mid' }, 'Mano ' + v.roundNo, h('br'), 'Meta ' + v.opts.target),
           h('div', { class: 't them' }, h('span', {}, 'Ellos'), h('b', {}, them))),
         h('button', { class: 'btn icon-btn', 'aria-label': 'Menú', onclick: showMenu }, '☰')),
-      S.status ? h('div', { class: 'conn' }, S.status) : null,
+      connBanner(),
       h('div', { class: 'opps' }, oppPanel(v, (you + 3) % 4), oppPanel(v, (you + 2) % 4), oppPanel(v, (you + 1) % 4)),
       h('div', { class: 'board-wrap' }, h('div', { id: 'board' })),
       status,
@@ -760,14 +828,18 @@
 
   /* ---- tablero ---- */
 
+  // Fichas pegadas unas a otras; al llegar al borde la cadena gira con una ficha vertical (esquina)
+  // y vuelve en sentido contrario, como en una mesa real.
   function layoutBoard(board, startIdx, W, u, ghosts) {
-    const Lg = u * 2, gap = 3, pad = Math.max(4, u * 0.3), rowH = Lg + 8;
+    const Lg = u * 2, gap = 1, pad = Math.max(3, u * 0.25);
     const items = [];
     const st = board[startIdx];
-    const sw = st.a === st.b ? u : Lg;
+    const sdbl = st.a === st.b;
+    const sw = sdbl ? u : Lg;
     const cx = W / 2;
-    items.push({ kind: 'tile', idx: startIdx, x: cx - sw / 2, row: 0, w: sw, vert: st.a === st.b, l: st.a, r: st.b });
+    items.push({ kind: 'tile', idx: startIdx, x: cx - sw / 2, w: sw, h: sdbl ? Lg : u, vert: sdbl, dbl: sdbl, row: 0, l: st.a, r: st.b });
 
+    // rowStep: +1 el brazo derecho baja, -1 el brazo izquierdo sube
     function arm(list, edge, dir, rowStep, isRight, ghostVal, ghostSide) {
       let row = 0;
       let cur = edge + dir * gap;
@@ -776,14 +848,28 @@
       for (const p of seq) {
         const dbl = !p.ghost && p.t.a === p.t.b;
         const w = dbl ? u : Lg;
-        if (dir === 1 && cur + w > W - pad) { row += rowStep; dir = -1; cur = W - pad; }
-        else if (dir === -1 && cur - w < pad) { row += rowStep; dir = 1; cur = pad; }
+        const room = dir === 1 ? (W - pad) - cur : cur - pad;
+        // esta ficha es una esquina si, tras ella, ya no cabría otra horizontal
+        const turn = room < w + u + gap;
+        const inner = p.ghost ? 0 : (isRight ? p.t.a : p.t.b);
+        const outer = p.ghost ? 0 : (isRight ? p.t.b : p.t.a);
+        if (turn) {
+          const x = dir === 1 ? cur : cur - u;
+          const it = { x, w: u, h: Lg, row, rows: [Math.min(row, row + rowStep), Math.max(row, row + rowStep)], turn: true };
+          if (p.ghost) Object.assign(it, { kind: 'slot', side: ghostSide, val: p.val });
+          else Object.assign(it, { kind: 'tile', idx: p.idx, vert: true, l: rowStep > 0 ? inner : outer, r: rowStep > 0 ? outer : inner });
+          items.push(it);
+          row += rowStep;
+          dir = -dir;
+          cur = dir === 1 ? x + u + gap : x - gap;
+          continue;
+        }
         const x = dir === 1 ? cur : cur - w;
         cur = dir === 1 ? cur + w + gap : cur - w - gap;
-        if (p.ghost) { items.push({ kind: 'slot', x, row, w: Lg, side: ghostSide, val: p.val }); continue; }
-        const inner = isRight ? p.t.a : p.t.b;
-        const outer = isRight ? p.t.b : p.t.a;
-        items.push({ kind: 'tile', idx: p.idx, x, row, w, vert: dbl, l: dir === 1 ? inner : outer, r: dir === 1 ? outer : inner });
+        const it = { x, w, h: dbl ? Lg : u, row, dbl };
+        if (p.ghost) Object.assign(it, { kind: 'slot', w: Lg, h: u, side: ghostSide, val: p.val });
+        else Object.assign(it, { kind: 'tile', idx: p.idx, vert: dbl, l: dir === 1 ? inner : outer, r: dir === 1 ? outer : inner });
+        items.push(it);
       }
     }
     const right = [], left = [];
@@ -792,14 +878,26 @@
     arm(right, cx + sw / 2, 1, 1, true, ghosts && ghosts.R != null ? ghosts.R : null, 'R');
     arm(left, cx - sw / 2, -1, -1, false, ghosts && ghosts.L != null ? ghosts.L : null, 'L');
 
+    // separación entre filas: compacta (1,5 fichas) salvo que dos dobles cruzados queden uno sobre otro
     let minRow = 0, maxRow = 0;
     items.forEach((it) => { minRow = Math.min(minRow, it.row); maxRow = Math.max(maxRow, it.row); });
+    const yc = {};
+    yc[minRow] = 0;
+    for (let r = minRow; r < maxRow; r++) {
+      let sp = u * 1.5;
+      const A = items.filter((it) => it.row === r && it.dbl);
+      const B = items.filter((it) => it.row === r + 1 && it.dbl);
+      if (A.some((p) => B.some((q) => p.x < q.x + q.w + 1 && q.x < p.x + p.w + 1))) sp = u * 2;
+      yc[r + 1] = yc[r] + sp;
+    }
+    let minY = Infinity, maxY = -Infinity;
     items.forEach((it) => {
-      const hgt = it.kind === 'tile' && it.vert ? Lg : u;
-      it.h = hgt;
-      it.y = (it.row - minRow) * rowH + (Lg - hgt) / 2;
+      if (it.turn) it.y = (yc[it.rows[0]] + yc[it.rows[1]]) / 2 - u;
+      else it.y = yc[it.row] - it.h / 2;
+      minY = Math.min(minY, it.y); maxY = Math.max(maxY, it.y + it.h);
     });
-    return { items, height: (maxRow - minRow + 1) * rowH - 8 };
+    items.forEach((it) => { it.y -= minY; });
+    return { items, height: maxY - minY };
   }
 
   function fitBoard() {
@@ -827,7 +925,7 @@
     }
     // fichas lo más grandes posible sin que la fila se salga de la mesa
     let u = 14, lay = null;
-    for (let cand = Math.min(44, Math.floor(W / 7)); cand >= 14; cand -= 2) {
+    for (let cand = Math.min(46, Math.floor(W / 6.5)); cand >= 14; cand -= 1) {
       const l = layoutBoard(v.board, v.startIdx, W, cand, ghosts);
       u = cand; lay = l;
       if (l.height <= H - 10) break;

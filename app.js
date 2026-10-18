@@ -831,7 +831,7 @@
   // Fichas pegadas unas a otras; al llegar al borde la cadena gira con una ficha vertical (esquina)
   // y vuelve en sentido contrario, como en una mesa real.
   function layoutBoard(board, startIdx, W, u, ghosts) {
-    const Lg = u * 2, gap = Math.max(5, u * 0.22), pad = Math.max(6, u * 0.3);
+    const Lg = u * 2, gap = 1, pad = Math.max(3, u * 0.25);
     const items = [];
     const st = board[startIdx];
     const sdbl = st.a === st.b;
@@ -880,14 +880,17 @@
 
     // separación entre filas: compacta (1,5 fichas) salvo que dos dobles cruzados queden uno sobre otro
     let minRow = 0, maxRow = 0;
-    items.forEach((it) => { minRow = Math.min(minRow, it.row); maxRow = Math.max(maxRow, it.row); });
+    items.forEach((it) => {
+      const rs = it.rows || [it.row, it.row];
+      minRow = Math.min(minRow, rs[0], it.row); maxRow = Math.max(maxRow, rs[1], it.row);
+    });
     const yc = {};
     yc[minRow] = 0;
     for (let r = minRow; r < maxRow; r++) {
-      let sp = u * 2.15;
+      let sp = u * 1.5;
       const A = items.filter((it) => it.row === r && it.dbl);
       const B = items.filter((it) => it.row === r + 1 && it.dbl);
-      if (A.some((p) => B.some((q) => p.x < q.x + q.w + gap && q.x < p.x + p.w + gap))) sp = u * 2;
+      if (A.some((p) => B.some((q) => p.x < q.x + q.w + 1 && q.x < p.x + p.w + 1))) sp = u * 2;
       yc[r + 1] = yc[r] + sp;
     }
     let minY = Infinity, maxY = -Infinity;
@@ -897,7 +900,25 @@
       minY = Math.min(minY, it.y); maxY = Math.max(maxY, it.y + it.h);
     });
     items.forEach((it) => { it.y -= minY; });
-    return { items, height: maxY - minY };
+    const s0 = items[0];
+    return { items, height: maxY - minY, anchorY: s0.y + s0.h / 2 };
+  }
+
+  const sizeCache = {};
+  function fixedTileSize(W, H) {
+    const key = Math.round(W) + 'x' + Math.round(H);
+    if (sizeCache[key]) return sizeCache[key];
+    // cadena de prueba: 28 fichas con 7 dobles repartidos, más una ranura en cada extremo
+    const chain = [];
+    for (let i = 0; i < 28; i++) chain.push(i % 4 === 1 ? { a: 1, b: 1 } : { a: 1, b: 2 });
+    let found = 14;
+    for (let cand = Math.min(44, Math.floor(W / 6.5)); cand >= 14; cand--) {
+      let worst = 0;
+      for (let st = 0; st < 28; st++) worst = Math.max(worst, layoutBoard(chain, st, W, cand, { L: 1, R: 1 }).height);
+      if (worst <= H - 10) { found = cand; break; }
+    }
+    sizeCache[key] = found;
+    return found;
   }
 
   function fitBoard() {
@@ -923,12 +944,16 @@
       const mv = (v.legal || []).find((m) => E.sameTile(m.tile, S.sel));
       if (mv) ghosts = { L: mv.sides.includes('L') ? e.L : null, R: mv.sides.includes('R') ? e.R : null };
     }
-    // Mantener las fichas legibles: elegir tamaño por el ancho disponible,
-    // no reducir toda la cadena cuando una partida larga supera la altura.
-    const u = Math.max(18, Math.min(42, Math.floor(W / 7.2)));
+    // Tamaño de ficha FIJO: el más grande con el que cabría una cadena completa (28 fichas) en la mesa.
+    // Así las fichas no cambian de tamaño mientras se juega.
+    const u = fixedTileSize(W, H);
     const lay = layoutBoard(v.board, v.startIdx, W, u, ghosts);
-    const boardHeight = Math.max(H, lay.height + 12);
-    const yOffset = lay.height < H ? (H - lay.height) / 2 : 6;
+    // La ficha inicial se queda en el centro de la mesa; la cadena solo se desplaza lo justo si se acerca a un borde.
+    const margin = 4;
+    let top = H / 2 - lay.anchorY;
+    top = Math.min(top, H - margin - lay.height);
+    top = Math.max(top, margin);
+    const scale = lay.height > H - 2 * margin ? (H - 2 * margin) / lay.height : 1;
     const ev = v.event && v.event.kind === 'play' ? v.event : null;
     const lastIdx = ev ? (ev.side === 'R' ? v.board.length - 1 : (ev.side === 'L' ? 0 : v.startIdx)) : -1;
     const popIdx = ev && S.popDone !== ev.id ? lastIdx : -1;
@@ -942,13 +967,13 @@
         el = tileEl(it.l, it.r, it.vert, u, (it.idx === popIdx ? 'pop ' : '') + (it.idx === lastIdx ? 'last' : ''));
       }
       el.style.left = it.x + 'px';
-      el.style.top = (it.y + yOffset) + 'px';
+      el.style.top = it.y + 'px';
       board.append(el);
     });
     board.style.width = W + 'px';
-    board.style.height = boardHeight + 'px';
-    board.style.transform = 'none';
-    board.style.top = '0px';
+    board.style.height = lay.height + 'px';
+    board.style.transform = 'scale(' + scale + ')';
+    board.style.top = (scale < 1 ? margin : top) + 'px';
   }
 
   let resizeT = null;

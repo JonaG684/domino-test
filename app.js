@@ -819,17 +819,23 @@
     const prevMsg = wrap.querySelector('.empty-board');
     if (prevMsg) prevMsg.remove();
 
-    const u = Math.max(16, Math.min(30, Math.floor(W / 16)));
     const e = E.ends(v.board);
     let ghosts = null;
     if (S.sel && v.phase === 'playing' && v.turn === v.you) {
       const mv = (v.legal || []).find((m) => E.sameTile(m.tile, S.sel));
       if (mv) ghosts = { L: mv.sides.includes('L') ? e.L : null, R: mv.sides.includes('R') ? e.R : null };
     }
-    const lay = layoutBoard(v.board, v.startIdx, W, u, ghosts);
+    // fichas lo más grandes posible sin que la fila se salga de la mesa
+    let u = 14, lay = null;
+    for (let cand = Math.min(44, Math.floor(W / 7)); cand >= 14; cand -= 2) {
+      const l = layoutBoard(v.board, v.startIdx, W, cand, ghosts);
+      u = cand; lay = l;
+      if (l.height <= H - 10) break;
+    }
     const scale = Math.min(1, (H - 8) / lay.height);
-    const popIdx = v.event && v.event.kind === 'play' && S.popDone !== v.event.id
-      ? (v.event.side === 'R' ? v.board.length - 1 : 0) : -1;
+    const ev = v.event && v.event.kind === 'play' ? v.event : null;
+    const lastIdx = ev ? (ev.side === 'R' ? v.board.length - 1 : (ev.side === 'L' ? 0 : v.startIdx)) : -1;
+    const popIdx = ev && S.popDone !== ev.id ? lastIdx : -1;
     if (v.event) S.popDone = v.event.id;
 
     lay.items.forEach((it) => {
@@ -837,7 +843,7 @@
       if (it.kind === 'slot') {
         el = h('div', { class: 'slot', style: 'width:' + it.w + 'px;height:' + it.h + 'px;font-size:' + Math.round(u * 0.8) + 'px', onclick: () => { if (S.sel) doPlay(S.sel, it.side); } }, it.val);
       } else {
-        el = tileEl(it.l, it.r, it.vert, u, it.idx === popIdx ? 'pop' : '');
+        el = tileEl(it.l, it.r, it.vert, u, (it.idx === popIdx ? 'pop ' : '') + (it.idx === lastIdx ? 'last' : ''));
       }
       el.style.left = it.x + 'px';
       el.style.top = it.y + 'px';

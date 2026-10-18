@@ -108,8 +108,9 @@ input[type=text]:focus { border-color: var(--gold); }
 .tile.v { width: var(--u); height: calc(var(--u) * 2); flex-direction: column; }
 .tile .half { flex: 1; display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr); padding: calc(var(--u) * .13); }
 .tile .cell { display: flex; align-items: center; justify-content: center; }
-.tile .pip { width: 82%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #4a4a4a, #151515 70%); }
-.tile .mid { background: #9c9071; flex: none; align-self: center; border-radius: 2px; }
+.tile .pip { width: 80%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #555, #111 72%); box-shadow: inset 0 calc(var(--u) * .03) calc(var(--u) * .05) rgba(0,0,0,.6), 0 calc(var(--u) * .02) 0 rgba(255,255,255,.7); }
+.tile .mid { position: relative; background: linear-gradient(#8a7e5f, #b7aa86); flex: none; align-self: center; border-radius: 2px; }
+.tile .mid::after { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * .2); height: calc(var(--u) * .2); transform: translate(-50%, -50%); border-radius: 50%; background: radial-gradient(circle at 35% 30%, #f3dc8a, #a67c1f); box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
 .tile.h .mid { width: max(1.5px, calc(var(--u) * .07)); height: 72%; }
 .tile.v .mid { height: max(1.5px, calc(var(--u) * .07)); width: 72%; }
 .tile.back { background: linear-gradient(145deg, #1d6b55, #0f4535); box-shadow: 0 1px 0 #072a20, 0 2px 4px rgba(0, 0, 0, .4); }
@@ -201,3 +202,8 @@ input[type=text]:focus { border-color: var(--gold); }
   .status { min-height: 20px; font-size: 14px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ficha recién jugada */
+#board .tile.last { box-shadow: 0 calc(var(--u) * .06) 0 #b9ad88, 0 0 0 2px var(--gold), 0 0 calc(var(--u) * .7) rgba(240, 195, 91, .65); z-index: 2; }
+#board .tile { filter: drop-shadow(0 2px 2px rgba(0,0,0,.25)); }
+.board-wrap { background: radial-gradient(90% 80% at 50% 40%, rgba(255,255,255,.08), rgba(0,0,0,.25)), repeating-linear-gradient(45deg, rgba(255,255,255,.012) 0 3px, transparent 3px 6px); box-shadow: inset 0 0 40px rgba(0,0,0,.35); }

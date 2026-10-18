@@ -831,7 +831,7 @@
   // Fichas pegadas unas a otras; al llegar al borde la cadena gira con una ficha vertical (esquina)
   // y vuelve en sentido contrario, como en una mesa real.
   function layoutBoard(board, startIdx, W, u, ghosts) {
-    const Lg = u * 2, gap = 1, pad = Math.max(3, u * 0.25);
+    const Lg = u * 2, gap = Math.max(5, u * 0.22), pad = Math.max(6, u * 0.3);
     const items = [];
     const st = board[startIdx];
     const sdbl = st.a === st.b;
@@ -884,10 +884,10 @@
     const yc = {};
     yc[minRow] = 0;
     for (let r = minRow; r < maxRow; r++) {
-      let sp = u * 1.5;
+      let sp = u * 2.15;
       const A = items.filter((it) => it.row === r && it.dbl);
       const B = items.filter((it) => it.row === r + 1 && it.dbl);
-      if (A.some((p) => B.some((q) => p.x < q.x + q.w + 1 && q.x < p.x + p.w + 1))) sp = u * 2;
+      if (A.some((p) => B.some((q) => p.x < q.x + q.w + gap && q.x < p.x + p.w + gap))) sp = u * 2;
       yc[r + 1] = yc[r] + sp;
     }
     let minY = Infinity, maxY = -Infinity;
@@ -923,14 +923,12 @@
       const mv = (v.legal || []).find((m) => E.sameTile(m.tile, S.sel));
       if (mv) ghosts = { L: mv.sides.includes('L') ? e.L : null, R: mv.sides.includes('R') ? e.R : null };
     }
-    // fichas lo más grandes posible sin que la fila se salga de la mesa
-    let u = 14, lay = null;
-    for (let cand = Math.min(46, Math.floor(W / 6.5)); cand >= 14; cand -= 1) {
-      const l = layoutBoard(v.board, v.startIdx, W, cand, ghosts);
-      u = cand; lay = l;
-      if (l.height <= H - 10) break;
-    }
-    const scale = Math.min(1, (H - 8) / lay.height);
+    // Mantener las fichas legibles: elegir tamaño por el ancho disponible,
+    // no reducir toda la cadena cuando una partida larga supera la altura.
+    const u = Math.max(18, Math.min(42, Math.floor(W / 7.2)));
+    const lay = layoutBoard(v.board, v.startIdx, W, u, ghosts);
+    const boardHeight = Math.max(H, lay.height + 12);
+    const yOffset = lay.height < H ? (H - lay.height) / 2 : 6;
     const ev = v.event && v.event.kind === 'play' ? v.event : null;
     const lastIdx = ev ? (ev.side === 'R' ? v.board.length - 1 : (ev.side === 'L' ? 0 : v.startIdx)) : -1;
     const popIdx = ev && S.popDone !== ev.id ? lastIdx : -1;
@@ -944,13 +942,13 @@
         el = tileEl(it.l, it.r, it.vert, u, (it.idx === popIdx ? 'pop ' : '') + (it.idx === lastIdx ? 'last' : ''));
       }
       el.style.left = it.x + 'px';
-      el.style.top = it.y + 'px';
+      el.style.top = (it.y + yOffset) + 'px';
       board.append(el);
     });
     board.style.width = W + 'px';
-    board.style.height = lay.height + 'px';
-    board.style.transform = 'scale(' + scale + ')';
-    board.style.top = Math.max(4, (H - lay.height * scale) / 2) + 'px';
+    board.style.height = boardHeight + 'px';
+    board.style.transform = 'none';
+    board.style.top = '0px';
   }
 
   let resizeT = null;

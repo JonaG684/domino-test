@@ -718,8 +718,8 @@
           h('div', { class: 'opt-label' }, 'Meta de puntos'),
           seg([[50, '50'], [100, '100'], [150, '150'], [200, '200']], v.opts.target, (t) => S.game.setOpts({ target: t, tranque: v.opts.tranque }))),
         h('div', {},
-          h('div', { class: 'opt-label' }, 'Si se tranca, el equipo ganador suma…'),
-          seg([['todo', 'Todos los puntos'], ['dif', 'Solo la diferencia']], v.opts.tranque, (t) => S.game.setOpts({ target: v.opts.target, tranque: t }))),
+          h('div', { class: 'opt-label' }, 'Si se tranca, la pareja ganadora suma…'),
+          seg([['rival', 'Puntos del rival'], ['dif', 'Solo la diferencia']], v.opts.tranque, (t) => S.game.setOpts({ target: v.opts.target, tranque: t }))),
         isHost
           ? h('button', { class: 'btn primary', disabled: !v.canStart, onclick: () => S.game.start() },
             v.canStart ? 'Empezar partida' : 'Faltan ' + free + ' jugador' + (free === 1 ? '' : 'es') + ' — agrega bots')
@@ -1077,8 +1077,8 @@
         h('li', {}, 'La primera mano sale quien tiene el doble seis, y debe abrir con él. Las siguientes salen quien ganó la mano anterior, con cualquier ficha.'),
         h('li', {}, 'El turno gira hacia la derecha. Cada ficha debe encajar con el número de uno de los dos extremos de la fila.'),
         h('li', {}, 'Si no tienes ninguna ficha que encaje, pasas (el juego lo hace solo).'),
-        h('li', {}, 'Dominó: quien se queda sin fichas gana la mano y su equipo suma todos los puntos de las fichas que quedan en las cuatro manos.'),
-        h('li', {}, 'Tranque: si nadie puede jugar, gana el equipo que sume menos puntos entre las fichas de sus dos jugadores. Suma todos los puntos de la mesa (o solo la diferencia, según la opción de la sala). Si empatan, nadie anota.'),
+        h('li', {}, 'Dominó: quien se queda sin fichas gana la mano y su pareja suma los puntos de las fichas que le quedan a la pareja rival (solo las del rival, no las de su propia pareja).'),
+        h('li', {}, 'Tranque: si nadie puede jugar, gana el equipo que sume menos puntos entre las fichas de sus dos jugadores. Suma los puntos de las fichas del rival (o solo la diferencia, según la opción de la sala). Si empatan, nadie anota.'),
         h('li', {}, 'Gana la partida el primer equipo que llegue a la meta de puntos.')),
       h('button', { class: 'btn primary', onclick: () => { if (S.view && S.view.phase !== 'lobby' && S.modalId === 'rules') closeModal(); else closeModal(); } }, 'Entendido')));
   }

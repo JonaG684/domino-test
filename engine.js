@@ -105,7 +105,7 @@
 
   class Game {
     constructor(opts) {
-      this.opts = Object.assign({ target: 100, tranque: 'todo' }, opts || {});
+      this.opts = Object.assign({ target: 100, tranque: 'rival' }, opts || {});
       this.seats = [0, 1, 2, 3].map(() => ({ kind: 'empty', name: '', token: '', connected: false }));
       this.phase = 'lobby';          // lobby | playing | roundEnd | gameEnd
       this.scores = [0, 0];          // equipo 0 = asientos 0 y 2; equipo 1 = asientos 1 y 3
@@ -175,7 +175,7 @@
     setOpts(o) {
       if (this.phase !== 'lobby') return;
       if ([50, 100, 150, 200].includes(o.target)) this.opts.target = o.target;
-      if (['todo', 'dif'].includes(o.tranque)) this.opts.tranque = o.tranque;
+      if (['rival', 'dif'].includes(o.tranque)) this.opts.tranque = o.tranque;
       this.emit();
     }
     canStart() { return this.phase === 'lobby' && this.seats.every((s) => s.kind !== 'empty'); }
@@ -274,9 +274,10 @@
       if (type === 'domino') {
         res.winnerSeat = seat;
         res.winnerTeam = seat % 2;
-        res.points = total;
+        // la pareja ganadora suma solo los puntos de las fichas que le quedan a la pareja rival
+        res.points = team[1 - seat % 2];
         this.nextStarter = seat;
-        this.addLog('¡Dominó de ' + this.nameOf(seat) + '! +' + total);
+        this.addLog('¡Dominó de ' + this.nameOf(seat) + '! +' + res.points);
       } else if (team[0] === team[1]) {
         res.tie = true;
         this.nextStarter = this.starter;
@@ -284,7 +285,7 @@
       } else {
         const wt = team[0] < team[1] ? 0 : 1;
         res.winnerTeam = wt;
-        res.points = this.opts.tranque === 'dif' ? Math.abs(team[0] - team[1]) : total;
+        res.points = this.opts.tranque === 'dif' ? Math.abs(team[0] - team[1]) : team[1 - wt];
         this.nextStarter = p[wt] <= p[wt + 2] ? wt : wt + 2;
         this.addLog('Tranque: gana el equipo con menos puntos (+' + res.points + ')');
       }

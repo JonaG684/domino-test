@@ -828,80 +828,75 @@
 
   /* ---- tablero ---- */
 
-  // Fichas pegadas unas a otras; al llegar al borde la cadena gira con una ficha vertical (esquina)
-  // y vuelve en sentido contrario, como en una mesa real.
-  function layoutBoard(board, startIdx, W, u, ghosts) {
-    const Lg = u * 2, gap = 1, pad = Math.max(3, u * 0.25);
+  // Mesa en espiral, como en el juego de referencia: desde la ficha central la cadena sale hacia los lados,
+  // al llegar al borde gira 90° y sigue en línea recta por el borde (en columnas y filas), y así va
+  // rodeando la mesa hacia adentro. Un brazo ocupa la mitad de arriba y el otro (simétrico) la de abajo,
+  // por eso nunca se cruzan. Las fichas llevan una separación pequeña entre sí.
+  function layoutBoard(board, startIdx, W, H, u, ghosts) {
+    const gap = Math.max(3, Math.round(u * 0.1));
+    const pad = 3, P = 2 * u + gap;
+    const cx = W / 2, cy = H / 2;
+    const XMAX0 = W - pad - u / 2, XMIN0 = pad + u / 2, YMIN0 = pad + u / 2, B0 = cy - 1.5 * u - gap;
+    const DIRS = ['R', 'U', 'L', 'D'];
+    const FLIP = { R: 'L', L: 'R', U: 'D', D: 'U' };
     const items = [];
+    let overflow = false;
+
     const st = board[startIdx];
     const sdbl = st.a === st.b;
-    const sw = sdbl ? u : Lg;
-    const cx = W / 2;
-    items.push({ kind: 'tile', idx: startIdx, x: cx - sw / 2, w: sw, h: sdbl ? Lg : u, vert: sdbl, dbl: sdbl, row: 0, l: st.a, r: st.b });
+    const start = { w: sdbl ? u : 2 * u, h: sdbl ? 2 * u : u };
+    start.x = cx - start.w / 2; start.y = cy - start.h / 2;
+    items.push({ kind: 'tile', idx: startIdx, x: start.x, y: start.y, w: start.w, h: start.h, vert: sdbl, l: st.a, r: st.b });
 
-    // rowStep: +1 el brazo derecho baja, -1 el brazo izquierdo sube
-    function arm(list, edge, dir, rowStep, isRight, ghostVal, ghostSide) {
-      let row = 0;
-      let cur = edge + dir * gap;
+    function arm(list, mirror, ghostVal, ghostSide) {
+      let d = 0, k = 0, lc = cy, last = start;
       const seq = list.slice();
       if (ghostVal != null) seq.push({ ghost: true, val: ghostVal });
       for (const p of seq) {
         const dbl = !p.ghost && p.t.a === p.t.b;
-        const w = dbl ? u : Lg;
-        const room = dir === 1 ? (W - pad) - cur : cur - pad;
-        // esta ficha es una esquina si, tras ella, ya no cabría otra horizontal
-        const turn = room < w + u + gap;
-        const inner = p.ghost ? 0 : (isRight ? p.t.a : p.t.b);
-        const outer = p.ghost ? 0 : (isRight ? p.t.b : p.t.a);
-        if (turn) {
-          const x = dir === 1 ? cur : cur - u;
-          const it = { x, w: u, h: Lg, row, rows: [Math.min(row, row + rowStep), Math.max(row, row + rowStep)], turn: true };
-          if (p.ghost) Object.assign(it, { kind: 'slot', side: ghostSide, val: p.val });
-          else Object.assign(it, { kind: 'tile', idx: p.idx, vert: true, l: rowStep > 0 ? inner : outer, r: rowStep > 0 ? outer : inner });
-          items.push(it);
-          row += rowStep;
-          dir = -dir;
-          cur = dir === 1 ? x + u + gap : x - gap;
-          continue;
+        const rectFor = (dir) => {
+          const horiz = dir === 'R' || dir === 'L';
+          const along = dbl ? u : 2 * u, across = dbl ? 2 * u : u;
+          const w = horiz ? along : across, hh = horiz ? across : along;
+          if (dir === 'R') return { x: last.x + last.w + gap, y: lc - hh / 2, w, h: hh };
+          if (dir === 'L') return { x: last.x - gap - w, y: lc - hh / 2, w, h: hh };
+          if (dir === 'U') return { x: lc - w / 2, y: last.y - gap - hh, w, h: hh };
+          return { x: lc - w / 2, y: last.y + last.h + gap, w, h: hh };
+        };
+        const fits = (dir, r) => {
+          if (dir === 'R') return r.x + r.w <= XMAX0 - k * P + 0.01;
+          if (dir === 'L') return r.x >= XMIN0 + k * P - 0.01;
+          if (dir === 'U') return r.y >= YMIN0 + k * P - 0.01;
+          return r.y + r.h <= B0 - k * P + 0.01;
+        };
+        let r = rectFor(DIRS[d]);
+        if (!fits(DIRS[d], r)) {
+          // esquina: la nueva ficha se apoya al ras del extremo de la anterior
+          const cur = DIRS[d];
+          if (cur === 'R') lc = last.x + last.w - u / 2;
+          else if (cur === 'U') lc = last.y + u / 2;
+          else if (cur === 'L') lc = last.x + u / 2;
+          else { lc = last.y + last.h - u / 2; k++; }
+          d = (d + 1) % 4;
+          r = rectFor(DIRS[d]);
+          if (!fits(DIRS[d], r)) overflow = true;
         }
-        const x = dir === 1 ? cur : cur - w;
-        cur = dir === 1 ? cur + w + gap : cur - w - gap;
-        const it = { x, w, h: dbl ? Lg : u, row, dbl };
-        if (p.ghost) Object.assign(it, { kind: 'slot', w: Lg, h: u, side: ghostSide, val: p.val });
-        else Object.assign(it, { kind: 'tile', idx: p.idx, vert: dbl, l: dir === 1 ? inner : outer, r: dir === 1 ? outer : inner });
-        items.push(it);
+        last = r;
+        const dirA = mirror ? FLIP[DIRS[d]] : DIRS[d];
+        const box = mirror ? { x: W - (r.x + r.w), y: 2 * cy - (r.y + r.h), w: r.w, h: r.h } : r;
+        if (p.ghost) { items.push({ kind: 'slot', x: box.x, y: box.y, w: box.w, h: box.h, side: ghostSide, val: p.val }); continue; }
+        const inner = mirror ? p.t.b : p.t.a, outer = mirror ? p.t.a : p.t.b;
+        const first = dirA === 'R' || dirA === 'D';
+        items.push({ kind: 'tile', idx: p.idx, x: box.x, y: box.y, w: box.w, h: box.h, vert: box.h > box.w,
+          l: first ? inner : outer, r: first ? outer : inner });
       }
     }
     const right = [], left = [];
     for (let i = startIdx + 1; i < board.length; i++) right.push({ t: board[i], idx: i });
     for (let i = startIdx - 1; i >= 0; i--) left.push({ t: board[i], idx: i });
-    arm(right, cx + sw / 2, 1, 1, true, ghosts && ghosts.R != null ? ghosts.R : null, 'R');
-    arm(left, cx - sw / 2, -1, -1, false, ghosts && ghosts.L != null ? ghosts.L : null, 'L');
-
-    // separación entre filas: compacta (1,5 fichas) salvo que dos dobles cruzados queden uno sobre otro
-    let minRow = 0, maxRow = 0;
-    items.forEach((it) => {
-      const rs = it.rows || [it.row, it.row];
-      minRow = Math.min(minRow, rs[0], it.row); maxRow = Math.max(maxRow, rs[1], it.row);
-    });
-    const yc = {};
-    yc[minRow] = 0;
-    for (let r = minRow; r < maxRow; r++) {
-      let sp = u * 1.5;
-      const A = items.filter((it) => it.row === r && it.dbl);
-      const B = items.filter((it) => it.row === r + 1 && it.dbl);
-      if (A.some((p) => B.some((q) => p.x < q.x + q.w + 1 && q.x < p.x + p.w + 1))) sp = u * 2;
-      yc[r + 1] = yc[r] + sp;
-    }
-    let minY = Infinity, maxY = -Infinity;
-    items.forEach((it) => {
-      if (it.turn) it.y = (yc[it.rows[0]] + yc[it.rows[1]]) / 2 - u;
-      else it.y = yc[it.row] - it.h / 2;
-      minY = Math.min(minY, it.y); maxY = Math.max(maxY, it.y + it.h);
-    });
-    items.forEach((it) => { it.y -= minY; });
-    const s0 = items[0];
-    return { items, height: maxY - minY, anchorY: s0.y + s0.h / 2 };
+    arm(right, false, ghosts && ghosts.R != null ? ghosts.R : null, 'R');
+    arm(left, true, ghosts && ghosts.L != null ? ghosts.L : null, 'L');
+    return { items, overflow };
   }
 
   const sizeCache = {};
@@ -911,11 +906,13 @@
     // cadena de prueba: 28 fichas con 7 dobles repartidos, más una ranura en cada extremo
     const chain = [];
     for (let i = 0; i < 28; i++) chain.push(i % 4 === 1 ? { a: 1, b: 1 } : { a: 1, b: 2 });
-    let found = 14;
-    for (let cand = Math.min(44, Math.floor(W / 6.5)); cand >= 14; cand--) {
-      let worst = 0;
-      for (let st = 0; st < 28; st++) worst = Math.max(worst, layoutBoard(chain, st, W, cand, { L: 1, R: 1 }).height);
-      if (worst <= H - 10) { found = cand; break; }
+    let found = 12;
+    for (let cand = Math.min(44, Math.floor(W / 6.5)); cand >= 12; cand--) {
+      let ok = true;
+      for (const st of [0, 4, 9, 13, 14, 18, 23, 27]) {
+        if (layoutBoard(chain, st, W, H, cand, { L: 1, R: 1 }).overflow) { ok = false; break; }
+      }
+      if (ok) { found = cand; break; }
     }
     sizeCache[key] = found;
     return found;
@@ -947,13 +944,7 @@
     // Tamaño de ficha FIJO: el más grande con el que cabría una cadena completa (28 fichas) en la mesa.
     // Así las fichas no cambian de tamaño mientras se juega.
     const u = fixedTileSize(W, H);
-    const lay = layoutBoard(v.board, v.startIdx, W, u, ghosts);
-    // La ficha inicial se queda en el centro de la mesa; la cadena solo se desplaza lo justo si se acerca a un borde.
-    const margin = 4;
-    let top = H / 2 - lay.anchorY;
-    top = Math.min(top, H - margin - lay.height);
-    top = Math.max(top, margin);
-    const scale = lay.height > H - 2 * margin ? (H - 2 * margin) / lay.height : 1;
+    const lay = layoutBoard(v.board, v.startIdx, W, H, u, ghosts);
     const ev = v.event && v.event.kind === 'play' ? v.event : null;
     const lastIdx = ev ? (ev.side === 'R' ? v.board.length - 1 : (ev.side === 'L' ? 0 : v.startIdx)) : -1;
     const popIdx = ev && S.popDone !== ev.id ? lastIdx : -1;
@@ -971,9 +962,9 @@
       board.append(el);
     });
     board.style.width = W + 'px';
-    board.style.height = lay.height + 'px';
-    board.style.transform = 'scale(' + scale + ')';
-    board.style.top = (scale < 1 ? margin : top) + 'px';
+    board.style.height = H + 'px';
+    board.style.transform = 'none';
+    board.style.top = '0px';
   }
 
   let resizeT = null;

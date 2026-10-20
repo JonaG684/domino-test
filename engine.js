@@ -10,6 +10,7 @@
 
   const BOT_NAMES = ['Luna', 'Rayo', 'Nube', 'Fénix', 'Trueno', 'Sol'];
   const EMOTES = ['👏', '😂', '😡', '🔥', '😴', '🤝'];
+  const PHRASES = ['¡Buena!', 'Pasé 😅', '¡Dale que te toca!', '¡Vamos!', '¡Qué suerte!', '¡Cuidado, tranque!', '¡Uf!', 'Gracias, compa'];
   const clone = (o) => JSON.parse(JSON.stringify(o));
 
   /* ---------- fichas y reglas básicas ---------- */
@@ -101,11 +102,11 @@
 
   const PERSIST = ['opts', 'seats', 'phase', 'scores', 'roundNo', 'firstHand', 'hands', 'board', 'startIdx',
     'turn', 'starter', 'nextStarter', 'passed', 'roundResult', 'lastEvent', 'eventId', 'log', 'openTile',
-    'lastEmote', 'emoteId'];
+    'lastEmote', 'emoteId', 'history'];
 
   class Game {
     constructor(opts) {
-      this.opts = Object.assign({ target: 100, tranque: 'rival' }, opts || {});
+      this.opts = Object.assign({ target: 100, tranque: 'rival', timer: 45 }, opts || {});
       this.seats = [0, 1, 2, 3].map(() => ({ kind: 'empty', name: '', token: '', connected: false }));
       this.phase = 'lobby';          // lobby | playing | roundEnd | gameEnd
       this.scores = [0, 0];          // equipo 0 = asientos 0 y 2; equipo 1 = asientos 1 y 3
@@ -125,6 +126,11 @@
       this.lastEmote = null;
       this.emoteId = 0;
       this.log = [];
+      this.history = [];
+      this.turnEnds = 0;
+      this.turnKey = -1;
+      this.tTimer = null;
+      this._auto = false;
       this.onChange = null;
       this.timer = null;
       this.noTimers = false;
@@ -135,9 +141,9 @@
     /* --- utilidades --- */
     nameOf(i) { return this.seats[i].name || ('Asiento ' + (i + 1)); }
     addLog(t) { this.log.push(t); if (this.log.length > 60) this.log.shift(); }
-    isAuto(i) { const s = this.seats[i]; return s.kind === 'bot' || (s.kind === 'human' && !s.connected); }
+    isAuto(i) { const s = this.seats[i]; return s.kind === 'bot' || (s.kind === 'human' && (!s.connected || !!s.afk)); }
     firstFreeSeat() { return this.seats.findIndex((s) => s.kind === 'empty'); }
-    emit() { if (this.onChange) this.onChange(); this.schedule(); }
+    emit() { this.schedule(); if (this.onChange) this.onChange(); }
 
     /* --- sala --- */
     seatHuman(i, name, token) {
@@ -175,6 +181,7 @@
     setOpts(o) {
       if (this.phase !== 'lobby') return;
       if ([50, 100, 150, 200].includes(o.target)) this.opts.target = o.target;
+      if ([0, 30, 45, 60].includes(o.timer)) this.opts.timer = o.timer;
       if (['rival', 'dif'].includes(o.tranque)) this.opts.tranque = o.tranque;
       this.emit();
     }
@@ -185,6 +192,7 @@
       this.roundNo = 0;
       this.firstHand = true;
       this.log = [];
+      this.history = [];
       this.startRound();
       this.emit();
       return true;
@@ -240,7 +248,7 @@
         placed = t[0] === R ? { a: t[0], b: t[1] } : { a: t[1], b: t[0] };
         this.board.push(placed);
       }
-      this.lastEvent = { id: ++this.eventId, kind: 'play', seat: seat, tile: placed, side: side, passes: [] };
+      this.lastEvent = { id: ++this.eventId, kind: 'play', seat: seat, tile: placed, side: side, passes: [], auto: !!this._auto };
       this.addLog(this.nameOf(seat) + ' jugó ' + t[0] + '|' + t[1]);
 
       if (hand.length === 0) {
@@ -297,6 +305,7 @@
         res.gameOver = true;
       }
       this.roundResult = res;
+      this.history.push({ no: this.roundNo, type: res.type, tie: res.tie, winnerTeam: res.winnerTeam, winnerSeat: res.winnerSeat, points: res.points });
       this.lastEvent = { id: ++this.eventId, kind: 'end', seat: seat == null ? -1 : seat, passes: [] };
     }
 
@@ -308,6 +317,7 @@
         this.roundNo = 0;
         this.firstHand = true;
         this.log = [];
+        this.history = [];
         this.startRound();
       } else return false;
       this.emit();
@@ -315,7 +325,7 @@
     }
 
     emote(seat, e) {
-      if (!EMOTES.includes(e)) return false;
+      if (!EMOTES.includes(e) && !PHRASES.includes(e)) return false;
       this.lastEmote = { id: ++this.emoteId, seat: seat, e: e };
       this.emit();
       return true;
@@ -325,7 +335,8 @@
     handle(seat, m) {
       if (!m || typeof m !== 'object') return;
       switch (m.type) {
-        case 'play': this.play(seat, m.tile, m.side); break;
+        case 'play': this.wake(seat); this.play(seat, m.tile, m.side); break;
+        case 'back': this.wake(seat); this.emit(); break;
         case 'sit': if (Number.isInteger(m.to)) this.sit(seat, m.to); break;
         case 'next': this.next(); break;
         case 'emote': this.emote(seat, m.e); break;
@@ -334,19 +345,44 @@
     }
 
     /* --- bots --- */
+    wake(seat) { const s = this.seats[seat]; if (s && s.kind === 'human') { s.idle = 0; s.afk = false; } }
     botMove() {
       if (this.phase !== 'playing' || !this.isAuto(this.turn)) return;
-      const mv = botChoose(this, this.turn);
-      if (mv) this.play(this.turn, mv.tile, mv.side);
+      const seat = this.turn;
+      const mv = botChoose(this, seat);
+      this._auto = this.seats[seat].kind === 'human';
+      if (mv) this.play(seat, mv.tile, mv.side);
+      this._auto = false;
+    }
+    // se acabó el tiempo de un humano conectado: juega un bot por él; a la segunda vez seguida queda «en automático»
+    timeout() {
+      if (this.phase !== 'playing' || this.isAuto(this.turn)) return;
+      const seat = this.turn, s = this.seats[seat];
+      s.idle = (s.idle || 0) + 1;
+      if (s.idle >= 2) s.afk = true;
+      this.addLog(this.nameOf(seat) + ' se quedó sin tiempo: jugó un bot');
+      const mv = botChoose(this, seat);
+      this._auto = true;
+      if (mv) this.play(seat, mv.tile, mv.side);
+      this._auto = false;
     }
     schedule() {
-      clearTimeout(this.timer);
-      this.timer = null;
-      if (this.noTimers || this.phase !== 'playing' || !this.isAuto(this.turn)) return;
-      const d = this.botDelay;
-      this.timer = setTimeout(() => { this.timer = null; this.botMove(); }, d[0] + Math.random() * (d[1] - d[0]));
+      clearTimeout(this.timer); clearTimeout(this.tTimer);
+      this.timer = null; this.tTimer = null;
+      if (this.noTimers || this.phase !== 'playing') { this.turnEnds = 0; return; }
+      if (this.isAuto(this.turn)) {
+        this.turnEnds = 0;
+        const d = this.botDelay;
+        this.timer = setTimeout(() => { this.timer = null; this.botMove(); }, d[0] + Math.random() * (d[1] - d[0]));
+        return;
+      }
+      const t = this.opts.timer || 0;
+      if (!t) { this.turnEnds = 0; return; }
+      if (this.turnKey !== this.eventId) { this.turnKey = this.eventId; this.turnEnds = Date.now() + t * 1000; }
+      const left = Math.max(0, this.turnEnds - Date.now());
+      this.tTimer = setTimeout(() => { this.tTimer = null; this.timeout(); }, left + 30);
     }
-    stop() { clearTimeout(this.timer); this.timer = null; this.onChange = null; }
+    stop() { clearTimeout(this.timer); clearTimeout(this.tTimer); this.timer = null; this.tTimer = null; this.onChange = null; }
 
     /* --- lo que ve cada jugador (nunca incluye fichas ajenas ni tokens) --- */
     view(seat) {
@@ -357,7 +393,7 @@
         you: seat,
         seats: this.seats.map((s, i) => ({
           kind: s.kind, name: s.name, host: !!s.host, connected: s.kind === 'human' ? s.connected : s.kind === 'bot',
-          count: this.hands[i] ? this.hands[i].length : 0,
+          count: this.hands[i] ? this.hands[i].length : 0, afk: !!s.afk,
         })),
         opts: this.opts,
         scores: this.scores.slice(),
@@ -374,6 +410,9 @@
         log: this.log.slice(-8),
         roundResult: reveal ? this.roundResult : null,
         canStart: this.canStart(),
+        history: this.history,
+        turnMs: playing && this.turnEnds ? Math.max(0, this.turnEnds - Date.now()) : 0,
+        afk: !!(this.seats[seat] && this.seats[seat].afk),
       };
     }
 
@@ -390,5 +429,5 @@
     }
   }
 
-  return { Game, allTiles, deal, pips, ends, sidesFor, legalMoves, botChoose, sameTile, EMOTES };
+  return { Game, allTiles, deal, pips, ends, sidesFor, legalMoves, botChoose, sameTile, EMOTES, PHRASES };
 });

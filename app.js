@@ -529,6 +529,7 @@
     S.view = null; S.sel = null; S.status = ''; S.bubbles = {};
     S.lastEventId = null; S.lastEmoteId = null; S.wasMine = false; S.popDone = 0; S.dealDone = 0; S.resultSeen = 0;
     S.mode = null;
+    cancelAnimationFrame(S.raf);
   }
 
   function leave(keepSaved) {
@@ -580,6 +581,8 @@
 
   function applyView(v) {
     S.view = v;
+    S.turnEnd = v.turnMs ? Date.now() + v.turnMs : 0;
+    S.turnTotal = ((v.opts && v.opts.timer) || 0) * 1000;
     keepAwake();
     if (S.sel && !(v.legal || []).some((m) => E.sameTile(m.tile, S.sel))) S.sel = null;
     const ev = v.event;
@@ -590,6 +593,7 @@
         if (ev.kind === 'play') {
           sound('play');
           if (ev.passes && ev.passes.length) { ev.passes.forEach((s) => bubble(s, '¡Paso!')); sound('pass'); }
+          if (ev.auto && ev.seat === v.you) toast('Se acabó tu tiempo: jugó un bot por ti');
         } else if (ev.kind === 'deal') sound('deal');
         else if (ev.kind === 'end' && v.roundResult) {
           const rr = v.roundResult;
@@ -598,7 +602,7 @@
       }
     }
     if (v.emote && v.emote.id !== S.lastEmoteId) {
-      if (S.lastEmoteId !== null) bubble(v.emote.seat, v.emote.e, true);
+      if (S.lastEmoteId !== null) bubble(v.emote.seat, v.emote.e, Array.from(v.emote.e).length <= 2);
       S.lastEmoteId = v.emote.id;
     } else if (S.lastEmoteId === null) S.lastEmoteId = v.emote ? v.emote.id : 0;
 
@@ -716,10 +720,13 @@
         h('p', { class: 'fine' }, 'Los compañeros se sientan enfrentados. El turno gira hacia la derecha (sentido antihorario).'),
         h('div', {},
           h('div', { class: 'opt-label' }, 'Meta de puntos'),
-          seg([[50, '50'], [100, '100'], [150, '150'], [200, '200']], v.opts.target, (t) => S.game.setOpts({ target: t, tranque: v.opts.tranque }))),
+          seg([[50, '50'], [100, '100'], [150, '150'], [200, '200']], v.opts.target, (t) => S.game.setOpts({ target: t }))),
         h('div', {},
           h('div', { class: 'opt-label' }, 'Si se tranca, la pareja ganadora suma…'),
-          seg([['rival', 'Puntos del rival'], ['dif', 'Solo la diferencia']], v.opts.tranque, (t) => S.game.setOpts({ target: v.opts.target, tranque: t }))),
+          seg([['rival', 'Puntos del rival'], ['dif', 'Solo la diferencia']], v.opts.tranque, (t) => S.game.setOpts({ tranque: t }))),
+        h('div', {},
+          h('div', { class: 'opt-label' }, 'Tiempo por turno (si te pasas, juega un bot por ti)'),
+          seg([[0, 'Sin límite'], [30, '30 s'], [45, '45 s'], [60, '60 s']], v.opts.timer == null ? 45 : v.opts.timer, (t) => S.game.setOpts({ timer: t }))),
         isHost
           ? h('button', { class: 'btn primary', disabled: !v.canStart, onclick: () => S.game.start() },
             v.canStart ? 'Empezar partida' : 'Faltan ' + free + ' jugador' + (free === 1 ? '' : 'es') + ' — agrega bots')
@@ -733,17 +740,23 @@
 
   const rel = (seat, you) => (seat - you + 4) % 4;
 
-  function oppPanel(v, seat) {
+  // pos: 'top' (tu pareja, frente a ti), 'left' o 'right' (los rivales a los lados), como en una mesa real
+  function oppPanel(v, seat, pos) {
     const s = v.seats[seat];
     const same = seat % 2 === v.you % 2;
     const turn = v.phase === 'playing' && v.turn === seat;
+    const side = pos !== 'top';
     const backs = h('div', { class: 'backs' });
-    for (let i = 0; i < s.count; i++) backs.append(backEl(11));
+    for (let i = 0; i < s.count; i++) backs.append(side ? h('div', { class: 'tile h back', style: '--u:10px' }) : backEl(12));
     const b = S.bubbles[seat];
-    return h('div', { class: 'opp ' + (same ? 'us' : 'them') + (turn ? ' turn' : '') + (!s.connected ? ' offline' : '') },
+    const ini = s.kind === 'bot' ? '🤖' : ((s.name || '?').trim().charAt(0).toUpperCase() || '?');
+    const sub = !s.connected ? '⚠ sin conexión' : (s.afk ? '⏸ automático' : (side ? String(s.count) : (same ? 'tu pareja' : 'rival') + ' · ' + s.count));
+    return h('div', { class: 'opp ' + pos + ' ' + (same ? 'us' : 'them') + (turn ? ' turn' : '') + (!s.connected ? ' offline' : '') },
       b ? h('div', { class: 'bubble' + (b.big ? ' big' : '') }, b.text) : null,
-      h('div', { class: 'nm' }, (s.kind === 'bot' ? '🤖 ' : '') + s.name),
-      h('div', { class: 'sub' }, !s.connected ? 'sin conexión (juega un bot)' : (same ? 'tu pareja' : 'rival') + ' · ' + s.count),
+      h('div', { class: 'avatar' + (turn && S.turnEnd ? ' timing' : '') }, ini),
+      h('div', { class: 'info' },
+        h('div', { class: 'nm' }, s.name),
+        h('div', { class: 'sub' }, sub)),
       backs);
   }
 
@@ -763,12 +776,15 @@
       status = h('div', { class: 'status' },
         h('button', { class: 'btn small', onclick: () => showResult(v) }, 'Ver resultado'),
         h('button', { class: 'btn small primary', onclick: () => send({ type: 'next' }) }, v.phase === 'gameEnd' ? 'Revancha' : 'Siguiente mano'));
+    } else if (v.afk && v.phase === 'playing') {
+      status = h('div', { class: 'status afk' }, h('span', {}, '⏸ Estás en automático por no jugar'),
+        h('button', { class: 'btn small primary', onclick: () => send({ type: 'back' }) }, 'Volver a jugar'));
     } else if (myTurn) {
       let msg = 'Tu turno — elige una ficha';
       if (!v.board.length && v.openTile) msg = 'Sales tú: juega el doble seis';
       else if (!v.board.length) msg = 'Sales tú: juega cualquier ficha';
       else if (S.sel) msg = 'Toca el extremo donde quieres jugarla';
-      status = h('div', { class: 'status mine' }, h('span', { class: 'pill' }, msg));
+      status = h('div', { class: 'status mine' }, h('span', { class: 'pill' }, msg, S.turnEnd ? h('span', { class: 'secs' }, '') : null));
     } else {
       status = h('div', { class: 'status' }, 'Turno de ' + v.seats[v.turn].name + '…');
     }
@@ -782,8 +798,9 @@
       return el;
     }));
 
-    const emotes = h('div', { class: 'emotes' }, ['👏', '😂', '😡', '🔥', '😴'].map((e) =>
-      h('button', { 'aria-label': 'Reacción ' + e, onclick: () => emoteThrottled(e) }, e)));
+    const emotes = h('div', { class: 'emotes' },
+      ['👏', '😂', '😡', '🔥'].map((e) => h('button', { 'aria-label': 'Reacción ' + e, onclick: () => emoteThrottled(e) }, e)),
+      h('button', { 'aria-label': 'Frases rápidas', onclick: showPhrases }, '💬'));
 
     const root = h('div', { class: 'screen game' },
       h('div', { class: 'g-top' },
@@ -793,15 +810,71 @@
           h('div', { class: 't them' }, h('span', {}, 'Ellos'), h('b', {}, them))),
         h('button', { class: 'btn icon-btn', 'aria-label': 'Menú', onclick: showMenu }, '☰')),
       connBanner(),
-      h('div', { class: 'opps' }, oppPanel(v, (you + 3) % 4), oppPanel(v, (you + 2) % 4), oppPanel(v, (you + 1) % 4)),
-      h('div', { class: 'board-wrap' }, h('div', { id: 'board' })),
+      oppPanel(v, (you + 2) % 4, 'top'),
+      h('div', { class: 'table-mid' },
+        oppPanel(v, (you + 3) % 4, 'left'),
+        h('div', { class: 'board-wrap' }, h('div', { id: 'board' })),
+        oppPanel(v, (you + 1) % 4, 'right')),
       status,
       h('div', { class: 'me' + (myTurn ? ' turn' : '') },
         myBubble ? h('div', { class: 'bubble' + (myBubble.big ? ' big' : '') }, myBubble.text) : null,
+        myTurn && S.turnEnd ? h('div', { class: 'tbar' }, h('i')) : null,
         h('div', { class: 'me-head' }, h('div', { class: 'nm' }, v.seats[you].name + ' (tú)'), emotes),
         hand));
     mount(root);
     fitBoard();
+    startTick();
+  }
+
+  // reloj: mueve el aro del avatar, la barra y los segundos sin volver a dibujar la pantalla
+  function startTick() {
+    cancelAnimationFrame(S.raf);
+    const step = () => {
+      const v = S.view;
+      if (!v || v.phase !== 'playing' || !S.turnEnd || !S.turnTotal) return;
+      const left = Math.max(0, S.turnEnd - Date.now());
+      const p = Math.min(1, left / S.turnTotal);
+      document.querySelectorAll('.timing').forEach((el) => el.style.setProperty('--p', p));
+      const bar = document.querySelector('.tbar');
+      if (bar) { bar.firstChild.style.width = (p * 100) + '%'; bar.classList.toggle('low', left < 10000); }
+      const secs = document.querySelector('.secs');
+      if (secs) secs.textContent = ' · ' + Math.ceil(left / 1000) + ' s';
+      S.raf = requestAnimationFrame(step);
+    };
+    step();
+  }
+
+  function showPhrases() {
+    openModal('phrases', h('div', { class: 'sheet' },
+      h('h2', {}, 'Frases rápidas'),
+      h('div', { class: 'phrases' }, E.PHRASES.map((p) => h('button', { class: 'btn', onclick: () => { closeModal(); emoteThrottled(p); } }, p))),
+      h('button', { class: 'btn small', onclick: closeModal }, 'Cerrar')));
+  }
+
+  function showHistory() {
+    const v = S.view;
+    if (!v) return;
+    const me = v.you % 2;
+    let us = 0, them = 0;
+    const rows = (v.history || []).map((x) => {
+      const w = x.winnerTeam;
+      const a = w === me ? x.points : 0, b = w !== null && w !== me ? x.points : 0;
+      us += a; them += b;
+      let what;
+      if (x.type === 'domino') what = 'Dominó de ' + (v.seats[x.winnerSeat] ? v.seats[x.winnerSeat].name : '?');
+      else if (x.tie) what = 'Tranque empatado';
+      else what = 'Tranque';
+      return h('div', { class: 'hrow' },
+        h('span', { class: 'hn' }, x.no), h('span', { class: 'hw' }, what),
+        h('span', { class: 'hp us' }, a ? '+' + a : '–'), h('span', { class: 'hp them' }, b ? '+' + b : '–'),
+        h('span', { class: 'ht' }, us + ' / ' + them));
+    });
+    openModal('history', h('div', { class: 'sheet' },
+      h('h2', {}, 'Historial de manos'),
+      h('div', { class: 'hrow head' }, h('span', { class: 'hn' }, '#'), h('span', { class: 'hw' }, 'Mano'),
+        h('span', { class: 'hp us' }, 'Nos.'), h('span', { class: 'hp them' }, 'Ellos'), h('span', { class: 'ht' }, 'Total')),
+      rows.length ? h('div', { class: 'hist' }, rows) : h('p', { class: 'dim' }, 'Todavía no se terminó ninguna mano.'),
+      h('button', { class: 'btn', onclick: closeModal }, 'Cerrar')));
   }
 
   let lastEmoteAt = 0;
@@ -1063,6 +1136,7 @@
         h('button', { class: 'btn small', onclick: shareLink }, 'Compartir')) : null,
       others.length ? h('div', { class: 'col' }, h('div', { class: 'opt-label' }, 'Jugadores'), others) : null,
       h('button', { class: 'btn', onclick: () => { S.sound = !S.sound; ls.set('domino.sound', S.sound ? '1' : '0'); showMenu(); } }, S.sound ? '🔊 Sonido: activado' : '🔇 Sonido: apagado'),
+      v && v.phase !== 'lobby' ? h('button', { class: 'btn', onclick: showHistory }, '📊 Historial de manos') : null,
       h('button', { class: 'btn', onclick: showRules }, '📖 Reglas'),
       h('button', { class: 'btn danger', onclick: confirmLeave }, 'Salir de la partida'),
       h('button', { class: 'btn small', onclick: closeModal }, 'Cerrar')));

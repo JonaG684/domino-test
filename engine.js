@@ -102,11 +102,11 @@
 
   const PERSIST = ['opts', 'seats', 'phase', 'scores', 'roundNo', 'firstHand', 'hands', 'board', 'startIdx',
     'turn', 'starter', 'nextStarter', 'passed', 'roundResult', 'lastEvent', 'eventId', 'log', 'openTile',
-    'lastEmote', 'emoteId', 'history'];
+    'lastEmote', 'emoteId', 'history', 'leadFor'];
 
   class Game {
     constructor(opts) {
-      this.opts = Object.assign({ target: 100, tranque: 'rival', timer: 45 }, opts || {});
+      this.opts = Object.assign({ target: 100, tranque: 'rival', timer: 45, salida: 'turnos' }, opts || {});
       this.seats = [0, 1, 2, 3].map(() => ({ kind: 'empty', name: '', token: '', connected: false }));
       this.phase = 'lobby';          // lobby | playing | roundEnd | gameEnd
       this.scores = [0, 0];          // equipo 0 = asientos 0 y 2; equipo 1 = asientos 1 y 3
@@ -127,6 +127,7 @@
       this.emoteId = 0;
       this.log = [];
       this.history = [];
+      this.leadFor = [null, null];   // último jugador que salió por cada pareja al ganar una mano
       this.turnEnds = 0;
       this.turnKey = -1;
       this.tTimer = null;
@@ -182,6 +183,7 @@
       if (this.phase !== 'lobby') return;
       if ([50, 100, 150, 200].includes(o.target)) this.opts.target = o.target;
       if ([0, 30, 45, 60].includes(o.timer)) this.opts.timer = o.timer;
+      if (['turnos', 'gana'].includes(o.salida)) this.opts.salida = o.salida;
       if (['rival', 'dif'].includes(o.tranque)) this.opts.tranque = o.tranque;
       this.emit();
     }
@@ -193,6 +195,7 @@
       this.firstHand = true;
       this.log = [];
       this.history = [];
+      this.leadFor = [null, null];
       this.startRound();
       this.emit();
       return true;
@@ -273,6 +276,16 @@
       return true;
     }
 
+    // Quién sale en la mano siguiente cuando una pareja gana: la primera vez, quien se fue; después se turnan
+    // los dos compañeros (sale el que no salió la última vez que ganó esa pareja).
+    pickStarter(team, who) {
+      if (this.opts.salida === 'gana') return who;
+      const prev = this.leadFor[team];
+      const s = prev === null || prev === undefined ? who : (prev + 2) % 4;
+      this.leadFor[team] = s;
+      return s;
+    }
+
     endRound(type, seat) {
       const p = this.hands.map(pips);
       const team = [p[0] + p[2], p[1] + p[3]];
@@ -284,7 +297,7 @@
         res.winnerTeam = seat % 2;
         // la pareja ganadora suma solo los puntos de las fichas que le quedan a la pareja rival
         res.points = team[1 - seat % 2];
-        this.nextStarter = seat;
+        this.nextStarter = this.pickStarter(seat % 2, seat);
         this.addLog('¡Dominó de ' + this.nameOf(seat) + '! +' + res.points);
       } else if (team[0] === team[1]) {
         res.tie = true;
@@ -294,7 +307,7 @@
         const wt = team[0] < team[1] ? 0 : 1;
         res.winnerTeam = wt;
         res.points = this.opts.tranque === 'dif' ? Math.abs(team[0] - team[1]) : team[1 - wt];
-        this.nextStarter = p[wt] <= p[wt + 2] ? wt : wt + 2;
+        this.nextStarter = this.pickStarter(wt, p[wt] <= p[wt + 2] ? wt : wt + 2);
         this.addLog('Tranque: gana el equipo con menos puntos (+' + res.points + ')');
       }
       if (res.winnerTeam !== null) this.scores[res.winnerTeam] += res.points;
@@ -304,6 +317,7 @@
         this.phase = 'gameEnd';
         res.gameOver = true;
       }
+      res.nextStarter = this.nextStarter;
       this.roundResult = res;
       this.history.push({ no: this.roundNo, type: res.type, tie: res.tie, winnerTeam: res.winnerTeam, winnerSeat: res.winnerSeat, points: res.points });
       this.lastEvent = { id: ++this.eventId, kind: 'end', seat: seat == null ? -1 : seat, passes: [] };
@@ -318,6 +332,7 @@
         this.firstHand = true;
         this.log = [];
         this.history = [];
+        this.leadFor = [null, null];
         this.startRound();
       } else return false;
       this.emit();

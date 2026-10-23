@@ -727,6 +727,9 @@
         h('div', {},
           h('div', { class: 'opt-label' }, 'Tiempo por turno (si te pasas, juega un bot por ti)'),
           seg([[0, 'Sin límite'], [30, '30 s'], [45, '45 s'], [60, '60 s']], v.opts.timer == null ? 45 : v.opts.timer, (t) => S.game.setOpts({ timer: t }))),
+        h('div', {},
+          h('div', { class: 'opt-label' }, 'Cuando una pareja gana, la mano siguiente sale…'),
+          seg([['turnos', 'Se turnan los compañeros'], ['gana', 'Quien se fue']], v.opts.salida || 'turnos', (t) => S.game.setOpts({ salida: t }))),
         isHost
           ? h('button', { class: 'btn primary', disabled: !v.canStart, onclick: () => S.game.start() },
             v.canStart ? 'Empezar partida' : 'Faltan ' + free + ' jugador' + (free === 1 ? '' : 'es') + ' — agrega bots')
@@ -1090,7 +1093,8 @@
       else { next.textContent = rr.gameOver ? 'Revancha' : 'Siguiente mano'; next.disabled = false; }
     };
     openModal('result', h('div', { class: 'sheet' },
-      h('div', { class: 'win-box' }, h('div', { class: 'big' }, title), h('p', { class: 'dim' }, sub)),
+      h('div', { class: 'win-box' }, h('div', { class: 'big' }, title), h('p', { class: 'dim' }, sub),
+        !rr.gameOver && rr.nextStarter != null && v.seats[rr.nextStarter] ? h('p', { style: 'margin-top:6px' }, 'Próxima mano sale: ', h('b', {}, rr.nextStarter === you ? 'tú' : v.seats[rr.nextStarter].name)) : null),
       hands,
       h('p', { class: 'center' }, 'Nosotros ', h('b', {}, us), ' — Ellos ', h('b', {}, them), h('span', { class: 'dim' }, '  (meta ' + v.opts.target + ')')),
       h('div', { class: 'row' },
@@ -1148,7 +1152,7 @@
       h('ul', {},
         h('li', {}, 'Se juega con las 28 fichas (doble seis). Cada jugador recibe 7.'),
         h('li', {}, 'Son dos parejas: los jugadores sentados frente a frente son compañeros.'),
-        h('li', {}, 'La primera mano sale quien tiene el doble seis, y debe abrir con él. Las siguientes salen quien ganó la mano anterior, con cualquier ficha.'),
+        h('li', {}, 'La primera mano sale quien tiene el doble seis, y debe abrir con él. En las siguientes sale la pareja que ganó la mano anterior, con cualquier ficha: la primera vez sale quien se fue, y después se turnan los dos compañeros (sale el que no salió la última vez). Se puede cambiar en la sala.'),
         h('li', {}, 'El turno gira hacia la derecha. Cada ficha debe encajar con el número de uno de los dos extremos de la fila.'),
         h('li', {}, 'Si no tienes ninguna ficha que encaje, pasas (el juego lo hace solo).'),
         h('li', {}, 'Dominó: quien se queda sin fichas gana la mano y su pareja suma los puntos de las fichas que le quedan a la pareja rival (solo las del rival, no las de su propia pareja).'),
